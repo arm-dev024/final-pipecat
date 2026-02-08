@@ -4,17 +4,18 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
-import argparse
 import asyncio
+import datetime
 import os
 from contextlib import asynccontextmanager
 from typing import Dict
 
-import uvicorn
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI
 from fastapi.responses import RedirectResponse
-from loguru import logger
+
+# from loguru import logger
+from pipecat.services.llm_service import FunctionCallParams
 from pipecat_ai_small_webrtc_prebuilt.frontend import SmallWebRTCPrebuiltUI
 
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
@@ -37,6 +38,11 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from fastapi.middleware.cors import CORSMiddleware
+from src.mongodb import mongo_db
+from src.schema import Appointment
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
 
 load_dotenv(override=True)
 
@@ -59,11 +65,73 @@ ice_servers = [
 ]
 
 # Mount the frontend at /
-app.mount("/client", SmallWebRTCPrebuiltUI)
+# app.mount("/client", SmallWebRTCPrebuiltUI)
+
+
+@app.get("/")
+def root():
+    return {"message": "Hello, World!"}
+
+
+async def create_appointment(
+    params: FunctionCallParams, name: str, date: str, time: str, phone: str, notes: str
+):
+    """Create an appointment.
+
+    Args:
+        name: The name of the customer. e.g. John Doe
+        date: The date of the appointment. YYYY-MM-DD format. e.g. 2026-02-08
+        time: The time of the appointment. 24-hour format. HH:MM format. e.g. 10:00
+        phone: The phone number of the customer. USA format. e.g. +1234567890
+        notes: The notes of the appointment. e.g. Please call me back.
+    """
+    appointment = Appointment(name=name, date=date, time=time, phone=phone, notes=notes)
+    result = mongo_db.insert_appointment(appointment)
+    await params.result_callback(result)
+
+
+# Define a function using the standard schema
+create_appointment_function = FunctionSchema(
+    name="create_appointment",
+    description="Create an appointment",
+    properties={
+        "name": {
+            "type": "string",
+            "description": "The name of the customer. e.g. John Doe",
+        },
+        "date": {
+            "type": "string",
+            "description": "The date of the appointment. YYYY-MM-DD format. e.g. 2026-02-08",
+        },
+        "time": {
+            "type": "string",
+            "description": "The time of the appointment. 24-hour format. HH:MM format. e.g. 10:00",
+        },
+        "phone": {
+            "type": "string",
+            "description": "The phone number of the customer. USA format. e.g. +1234567890",
+        },
+        "notes": {
+            "type": "string",
+            "default": "",
+            "description": "The notes of the appointment. e.g. Please call me back. (optional)",
+        },
+    },
+    required=[
+        "name",
+        "date",
+        "time",
+        "phone",
+        "notes",
+    ],
+)
+
+# Create a tools schema with your functions
+tools = ToolsSchema(standard_tools=[create_appointment_function])
 
 
 async def run_example(webrtc_connection: SmallWebRTCConnection):
-    logger.info(f"Starting bot")
+    # logger.info(f"Starting bot")
 
     # Create a transport using the WebRTC connection
     transport = SmallWebRTCTransport(
@@ -78,7 +146,7 @@ async def run_example(webrtc_connection: SmallWebRTCConnection):
 
     tts = DeepgramTTSService(
         api_key=os.getenv("DEEPGRAM_API_KEY"),
-        voice="aura-2-thalia-en",
+        voice="aura-2-delia-en",
     )
 
     llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"))
@@ -86,11 +154,17 @@ async def run_example(webrtc_connection: SmallWebRTCConnection):
     messages = [
         {
             "role": "system",
-            "content": "You are a helpful LLM in a WebRTC call. Your goal is to demonstrate your capabilities in a succinct way. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. Respond to what the user said in a creative and helpful way.",
+            "content": f"You are a helpful assistant that can create appointments for a Barber Shop. Ask the user for the appointment details and then create the appointment using the create_appointment function. Try to be friendly and helpful. Try to be concise and to the point. If the user asks for the appointment details, ask them for the name, date, time, phone, and notes(optional). if user don't provide the notes, pass as empty string. Today's date and time is {datetime.now().strftime('%Y-%m-%d %H:%M')}",
         },
     ]
 
-    context = LLMContext(messages)
+    context = LLMContext(messages, tools=tools)
+
+    llm.register_direct_function(
+        create_appointment,
+        cancel_on_interruption=False,  # Don't cancel on interruption
+    )
+
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -127,7 +201,7 @@ async def run_example(webrtc_connection: SmallWebRTCConnection):
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
-        logger.info(f"Client connected")
+        # logger.info(f"Client connected")
         # Kick off the conversation.
         messages.append(
             {"role": "system", "content": "Please introduce yourself to the user."}
@@ -136,7 +210,7 @@ async def run_example(webrtc_connection: SmallWebRTCConnection):
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        logger.info(f"Client disconnected")
+        # logger.info(f"Client disconnected")
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=False)
@@ -144,9 +218,9 @@ async def run_example(webrtc_connection: SmallWebRTCConnection):
     await runner.run(task)
 
 
-@app.get("/", include_in_schema=False)
-async def root_redirect():
-    return RedirectResponse(url="/client/")
+# @app.get("/", include_in_schema=False)
+# async def root_redirect():
+#     return RedirectResponse(url="/client/")
 
 
 @app.post("/api/offer")
@@ -155,7 +229,7 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
 
     if pc_id and pc_id in pcs_map:
         pipecat_connection = pcs_map[pc_id]
-        logger.info(f"Reusing existing connection for pc_id: {pc_id}")
+        # logger.info(f"Reusing existing connection for pc_id: {pc_id}")
         await pipecat_connection.renegotiate(
             sdp=request["sdp"],
             type=request["type"],
@@ -167,9 +241,9 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
 
         @pipecat_connection.event_handler("closed")
         async def handle_disconnected(webrtc_connection: SmallWebRTCConnection):
-            logger.info(
-                f"Discarding peer connection for pc_id: {webrtc_connection.pc_id}"
-            )
+            # logger.info(
+            #     f"Discarding peer connection for pc_id: {webrtc_connection.pc_id}"
+            # )
             pcs_map.pop(webrtc_connection.pc_id, None)
 
         # Run example function with SmallWebRTC transport arguments.
@@ -190,6 +264,16 @@ async def lifespan(app: FastAPI):
     pcs_map.clear()
 
 
+mongo_db.run()
+# mongo_db.insert_appointment(
+#     Appointment(
+#         name="John Doe",
+#         date="2026-02-08",
+#         time="10:00",
+#         phone="1234567890",
+#         notes="This is a test appointment",
+#     )
+# )
 # if __name__ == "__main__":
 #     parser = argparse.ArgumentParser(description="Pipecat Bot Runner")
 #     parser.add_argument(

@@ -6,5 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "pipecat-ai[daily,deepgram,local-smart-turn-v3,openai,runner,silero,webrtc]",
+    "pymongo>=4.16.0",
     "uvicorn>=0.40.0",
 ]
