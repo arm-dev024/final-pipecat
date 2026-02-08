@@ -5,7 +5,7 @@
 #
 
 import asyncio
-import datetime
+from datetime import datetime
 import os
 from contextlib import asynccontextmanager
 from typing import Dict
@@ -151,10 +151,19 @@ async def run_example(webrtc_connection: SmallWebRTCConnection):
 
     llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"))
 
+    # Get the time first to keep the f-string readable
+    current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M")
     messages = [
         {
             "role": "system",
-            "content": f"You are a helpful assistant that can create appointments for a Barber Shop. Ask the user for the appointment details and then create the appointment using the create_appointment function. Try to be friendly and helpful. Try to be concise and to the point. If the user asks for the appointment details, ask them for the name, date, time, phone, and notes(optional). if user don't provide the notes, pass as empty string. Today's date and time is {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "content": (
+                f"You are a friendly and concise Barber Shop assistant. "
+                f"To create an appointment, ask for the user's name, date, time, and phone. "
+                f"Notes are optional; if not provided, pass an empty string to the function. "
+                f"Once you have the details, use 'create_appointment'. "
+                f"Current date and time: {current_datetime}."
+                f"After successfully creating the appointment, thank the user and say goodbye."
+            ),
         },
     ]
 
